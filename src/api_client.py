@@ -18,14 +18,16 @@ class DeepSeekClient:
         )
         self.max_retries = max_retries
 
-    def chat(self, prompt, stream=False, temperature=1.0):
+    # def chat(self, prompt, stream=False, temperature=1.0):
+    def chat(self, messages, stream=False, temperature=1.0):
         """统一的大模型调用入口"""
         retry_count = 0
         while retry_count <= self.max_retries:
             try:
                 response = self.client.chat.completions.create(
                     model="deepseek-v4-flash",
-                    messages=[{"role": "user", "content": prompt}],
+                    # messages=[{"role": "user", "content": prompt}],
+                    messages = messages,
                     stream=stream,
                     temperature=temperature
                 )
