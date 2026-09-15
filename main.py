@@ -1,64 +1,68 @@
 # 程序的唯一入口
+from models.ResumeInfo import ResumeInfo
+from pydantic import ValidationError
 from src.api_client import DeepSeekClient
+import json
 
-ai_client = DeepSeekClient(max_retries=2, timeout=20.0)
+from src.jisoModeAndPydantic import extract_with_retry
 
-def main():
+
+# 【依赖注入改造 1/4】模块顶部原来有一行
+#     ai_client = DeepSeekClient(max_retries=2, timeout=20.0)
+# 它有两个问题，所以删掉：
+# 1. import 副作用：只要有人 import main，就会读 .env、建连接池；
+#    以后想写单元测试 import 里面的函数，会先把真客户端建起来。
+# 2. 隐式全局依赖：下面每个函数用到的 ai_client 从哪来，看函数签名看不出来；
+#    而 structured_output 里又自己 new 了一个，同一个文件两个实例打架。
+# 现在改成：客户端只在入口处 new 一次（组合根），然后显式当参数传下去。
+def build_client() -> DeepSeekClient:
+    """唯一构造客户端的地方（组合根），模型名/超时等配置只在这里改一次。"""
+    return DeepSeekClient(max_retries=2, timeout=20.0)
+
+
+def main(client: DeepSeekClient):
     print("初始化大模型客户端...")
-    ai_client = DeepSeekClient(max_retries=2, timeout=20.0)
 
     # 测试非流式
     print("\n--- 非流式调用 ---")
-    result = ai_client.chat("用一句话介绍杭州", stream=False, temperature=0.5)
+    # 【依赖注入改造 2/4】这里原来用全局 ai_client 或自己 new 一个，
+    # 现在统一用传进来的 client：谁创建、谁传参，在调用点上就能看清。
+    result = client.chat(
+        messages=[{"role": "user", "content": "用一句话介绍杭州"}],
+        stream=False,
+        temperature=0.5
+    )
     print(result)
 
     # 测试流式
     print("\n--- 流式调用 ---")
-    ai_client.chat("写一首关于西湖的诗", stream=True)
+    # client.chat(messages=[{"role": "user", "content": "写一首关于西湖的诗"}], stream=True)
 
 
-# 多轮对话入口
-# def start_chat():
-#
-#     print("AI 助手已启动（输入 'quit' 退出）...")
-#
-#     # 1. 初始化客户端（这就像 Java 里的注入 Service）
-#     ai_client = DeepSeekClient(max_retries=2, timeout=30.0)
-#
-#     # 2. 初始化对话历史（核心！大模型没有记忆，全靠你把历史传给它）
-#     # system 角色用来设定 AI 的人设
-#     history_messages = [
-#         {"role": "system", "content": "你是一个友善的编程助手。"}
-#     ]
-#
-#     while True:
-#         # 3. 接收用户输入
-#         user_input = input("\n我: ")
-#
-#         if user_input.strip().lower() in ['quit', 'exit', 'q']:
-#             print("再见！")
-#             break
-#
-#         # 4. 将用户输入放入历史记录
-#         history_messages.append({"role": "user", "content": user_input})
-#
-#         try:
-#             # 5. 调用大模型，把完整历史传过去
-#             print("AI: ", end="", flush=True)
-#             ai_reply = ai_client.chat(history_messages, stream=True, temperature=0.7)
-#
-#             # stream=True 时，_handle_stream_response 已经边打印边返回了完整字符串
-#             # stream=False 时，上面这行需要改成：
-#             # ai_reply = ai_client.chat(history_messages, stream=False)
-#             # print(ai_reply)
-#
-#             # 6. 将 AI 的回复也放入历史记录（这样下一轮对话时，AI 才能记住刚才说了什么）
-#             history_messages.append({"role": "assistant", "content": ai_reply})
-#
-#         except Exception as e:
-#             print(f"发生错误: {e}")
+# 结构化输出
+def structured_output(client: DeepSeekClient):
+    print("初始化大模型客户端...")
+    # 【依赖注入改造 3/4】删掉了这里原来的局部
+    #     ai_client = DeepSeekClient(max_retries=2, timeout=20.0)
+    # 同一个程序里维护多个配置可能不一致的客户端，是重复来源也是坑。
 
-def start_chat():
+    # DeepSeek JSON Mode
+    result = client.chat(
+        messages= [
+            {"role": "system", "content": "你是一个信息助手，始终以 json 格式输出。"},
+            {"role": "user", "content": "用一句话介绍杭州"}
+        ],
+        stream=False,
+        temperature=0.5,
+        response_format={"type": "json_object"}
+    )
+    # print("-----------------------------------------------------------------\n"+repr(result)+"\n---------------------------------------------------")
+    data = json.loads(result)
+    print(data)
+
+
+# 多轮对话
+def start_chat(client: DeepSeekClient):
 
     ######## 自己写的 System Prompt 包含四要素：角色 + 约束 + 格式 + 兜底 ########
 
@@ -73,7 +77,7 @@ def start_chat():
         - 涉及 Python 概念时，主动用 Java 类比帮助理解
         - 代码示例保持简洁，不超过 30 行
 
-        # 约束
+        # 约束    
         - 只回答与编程、LLM 开发相关的问题,其他无关问题直接拒绝回答
         - 不确定的技术细节明确说"我不确定"，不要编造 API 或类名
         - 不推荐已弃用的库或写法
@@ -130,7 +134,7 @@ def start_chat():
         # 拼接用户输入
         history_messages.append({"role": "user", "content": user_input})
         #调用大模型
-        reply  = ai_client.chat(
+        reply  = client.chat(
             history_messages,
             stream=False,
             temperature=0.7,
@@ -143,7 +147,33 @@ def start_chat():
         # for m in history_messages:
         #     print(f"  - {m['role']}: {m['content'][:40]}...")
 
+def model_json(client: DeepSeekClient):
+    history_messages = [
+        {"role": "system", "content": "从简历提取信息，以 json 格式输出，字段: name, years, skills"},
+        {"role": "user", "content": "刘七，资深工程师，工作经验丰富，技术栈很广"}  # 👈 故意模糊
+    ]
+
+    try:
+        result = extract_with_retry(
+            client,
+            history_messages,
+            ResumeInfo,
+            response_format={"type": "json_object"},  # 开 JSON Mode，让模型直接吐 JSON
+        )
+        print(f"输出结果为{result}")
+    except ValidationError as e:
+        # 【依赖注入改造 4/4】原来是裸 `except:`，它会把 TypeError、KeyError 这类
+        # 真正的 bug 一起吞掉，再统一打印成"格式化 json 错误"，排查方向直接被带偏
+        # ——这次 response_format 的 TypeError 就是被它掩盖成"模型不听话"的。
+        # 只捕获预期内的校验失败，并把真实错误打出来。
+        print(f"模型返回内容不是合法 JSON 或不符合 schema：{e}")
+
 
 if __name__ == "__main__":
-    # main()
-    start_chat()
+    # 【依赖注入改造·收口】客户端只在入口构造一次，再传给要跑的那个函数。
+    # 想换模型/超时只改 build_client() 一处；想换实验只改下面这一行。
+    client = build_client()
+    # main(client)
+    # start_chat(client)
+    structured_output(client)
+    # model_json(client)

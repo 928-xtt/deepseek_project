@@ -9,28 +9,59 @@ class DeepSeekClient:
     """
         大模型调用封装类 (类似 Java 里的 DeepSeekService)
     """
-    def __init__(self, max_retries=3, timeout=30.0):
-        load_dotenv()
-        self.client = OpenAI(
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com",
-            timeout=timeout
-        )
+    # 【依赖注入改造 1/3】构造注入：这个类只负责"怎么调"，"调到哪、用哪个模型"
+    # 属于它的配置，应该由构造函数传进来，而不是写死在 chat() 里。
+    # - model / base_url 提成参数：换模型、换兼容端点（比如本地 vLLM）不用改业务方法，
+    #   同一个进程里也能同时持有两个不同模型的客户端。
+    # - client 参数：允许外部注入底层 SDK 客户端。测试时传入一个假客户端就能
+    #   断言重试逻辑，既不用联网也不需要真的 key。
+    def __init__(
+        self,
+        model="deepseek-flash",
+        base_url="https://api.deepseek.com",
+        max_retries=3,
+        timeout=30.0,
+        client=None,
+    ):
+        self.model = model
+        self.base_url = base_url
         self.max_retries = max_retries
+        if client is not None:
+            # 外部注入时不再读 .env、不再新建连接池：配置权完全交给调用方
+            self.client = client
+        else:
+            load_dotenv()
+            self.client = OpenAI(
+                api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url=base_url,
+                timeout=timeout
+            )
 
     # def chat(self, prompt, stream=False, temperature=1.0):
-    def chat(self, messages, stream=False, temperature=1.0):
-        """统一的大模型调用入口"""
+    def chat(self, messages, stream=False, temperature=1.0, response_format=None):
+        """统一的大模型调用入口
+
+        【依赖注入改造 2/3】为什么这里必须显式声明 response_format 并透传：
+        它是"调用方决定要不要 JSON Mode"的传输层选项，属于入参而不是实现细节。
+        之前 main.structured_output() 传了它、这里没声明，Python 在进入函数体
+        之前就抛 TypeError: unexpected keyword argument，重试逻辑根本没机会执行。
+        """
         retry_count = 0
         while retry_count <= self.max_retries:
             try:
-                response = self.client.chat.completions.create(
-                    model="deepseek-v4-flash",
-                    # messages=[{"role": "user", "content": prompt}],
-                    messages = messages,
-                    stream=stream,
-                    temperature=temperature
-                )
+                # 【模型名不再写死】用构造时传入的 self.model，换模型只改一处配置
+                params = {
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": stream,
+                    "temperature": temperature,
+                }
+                # 只在显式传入时才带上这个键：SDK 会把 None 原样序列化进请求体，
+                # 部分 OpenAI 兼容端点收到 "response_format": null 会直接报 400
+                if response_format is not None:
+                    params["response_format"] = response_format
+
+                response = self.client.chat.completions.create(**params)
                 if stream:
                     return self._handle_stream_response(response)
                 else:
