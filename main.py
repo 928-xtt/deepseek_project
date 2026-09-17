@@ -1,9 +1,9 @@
 # 程序的唯一入口
+
 from models.ResumeInfo import ResumeInfo
 from pydantic import ValidationError
 from src.api_client import DeepSeekClient
 import json
-
 from src.jisoModeAndPydantic import extract_with_retry
 
 
@@ -37,6 +37,7 @@ def main(client: DeepSeekClient):
     # 测试流式
     print("\n--- 流式调用 ---")
     # client.chat(messages=[{"role": "user", "content": "写一首关于西湖的诗"}], stream=True)
+
 
 
 # 结构化输出
@@ -114,11 +115,13 @@ def start_chat(client: DeepSeekClient):
             3. 是否需要转人工（是/否）
     """
 
+    sys_prompt = "你是一名专业的心理医生，同时也是一名专业的哲学大师 "
+
     # history_messages = [
     #     {"role": "system", "content": "你是一个助手。"}
     # ]
     history_messages = [
-        {"role": "system", "content": sys_prompt1},
+        {"role": "system", "content": sys_prompt},
     ]
 
     print("开始对话（输入 'quit' 退出）")
@@ -175,5 +178,6 @@ if __name__ == "__main__":
     client = build_client()
     # main(client)
     # start_chat(client)
-    structured_output(client)
+    # structured_output(client)
     # model_json(client)
+    summarize(client)
