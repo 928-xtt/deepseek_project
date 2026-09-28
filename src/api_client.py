@@ -9,8 +9,6 @@ from openai import (
     APIStatusError,
     APITimeoutError,
 )
-import tiktoken
-
 
 class DeepSeekClient:
     """
@@ -55,6 +53,7 @@ class DeepSeekClient:
         之前就抛 TypeError: unexpected keyword argument，重试逻辑根本没机会执行。
         """
         retry_count = 0
+  
         while retry_count <= self.max_retries:
             try:
                 # 【模型名不再写死】用构造时传入的 self.model，换模型只改一处配置
@@ -70,12 +69,11 @@ class DeepSeekClient:
                     params["response_format"] = response_format
 
                 response = self.client.chat.completions.create(**params)
-                print(
-                    f"----------------------------本轮输入 token: {response.usage.prompt_tokens}----------------------------"
-                )
+            
                 if stream:
                     return self._handle_stream_response(response)
                 else:
+                    print(f"----------------------------本轮输入 token: {response.usage.prompt_tokens}----------------------------")
                     return response.choices[0].message.content
 
                     # ---------------- 超时处理 ----------------
@@ -132,35 +130,10 @@ class DeepSeekClient:
                 full_content += content
         return full_content
 
-    # N轮对话裁剪
-
+# N轮对话裁剪
 def sliding_window(messages: list[dict], max_turns: int = 10) -> list[dict]:
     system = [m for m in messages if m["role"] == "system"]
     history = [m for m in messages if m["role"] != "system"]
     return system + history[-(max_turns * 2) :]  # 一轮 = user + assistant
 
 
-# 在调用llm之前,计算本次对话输入消耗的token(包含了中文和英文两种语言)
-enc = tiktoken.get_encoding("cl100k_base")  # DeepSeek 与 OpenAI tokenizer 兼容
-
-def count_tokens(text: str) -> int:
-    return len(enc.encode(text))
-
-
-# 把旧对话交给 DeepSeek 压成一段摘要
-def summarize(
-    client: DeepSeekClient, old_messages: list[dict] = [], prev_summary: str = ""
-) -> str:
-    text = "\n".join(f"{m['role']}: {m['content']}" for m in old_messages)
-    prompt = f"""请把以下对话压缩到 300 字内,必须保留:
-1. 用户核心目标  2. 已确认事实  3. 已做决策  4. 待办事项
-{"前情摘要:" + prev_summary if prev_summary else ""}
-对话内容:
-{text}"""
-
-    resp = client.chat(
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
-    print(resp)
-    return resp

@@ -4,6 +4,7 @@ from models.ResumeInfo import ResumeInfo
 from pydantic import ValidationError
 from src.api_client import DeepSeekClient
 import json
+from src.context_manager import ContextManager
 from src.jisoModeAndPydantic import extract_with_retry
 
 
@@ -115,16 +116,20 @@ def start_chat(client: DeepSeekClient):
             3. 是否需要转人工（是/否）
     """
 
-    sys_prompt = "你是一名专业的心理医生，同时也是一名专业的哲学大师 "
+    sys_prompt = "你是我的助手 "
 
     # history_messages = [
     #     {"role": "system", "content": "你是一个助手。"}
     # ]
-    history_messages = [
-        {"role": "system", "content": sys_prompt},
-    ]
+    # history_messages = [
+    #     {"role": "system", "content": sys_prompt},
+    # ]
 
     print("开始对话（输入 'quit' 退出）")
+
+    # 上下文压缩,在发送消息给llm之前对内容进行压缩,防止token超限
+    # ✅ 在循环外创建:整个会话共用这一个实例
+    cm = ContextManager(client, keep_turns=6, trigger_tokens=3000)
 
     while True:
         # 用户输入
@@ -135,7 +140,13 @@ def start_chat(client: DeepSeekClient):
         if not user_input:
             continue
         # 拼接用户输入
-        history_messages.append({"role": "user", "content": user_input})
+        # history_messages.append({"role": "user", "content": user_input})
+
+        # 上下文压缩,在发送消息给llm之前对内容进行压缩,防止token超限
+        # 在压缩中处理用户输入以及历史对话记录,
+        cm.add("user",user_input)
+        history_messages = cm.build(sys_prompt)
+        print(f"-------------------------------------------{history_messages}-------------------------------------------------------")
         #调用大模型
         reply  = client.chat(
             history_messages,
@@ -143,7 +154,8 @@ def start_chat(client: DeepSeekClient):
             temperature=0.7,
         )
         #拼接大模型回复内容
-        history_messages.append({"role": "assistant", "content": reply})
+        # history_messages.append({"role": "assistant", "content": })
+        cm.add("assistant",reply)
         print(f"AI: {reply}")
 
         # print(f"\n[DEBUG] 当前 history 长度: {len(history_messages)}")
@@ -177,7 +189,7 @@ if __name__ == "__main__":
     # 想换模型/超时只改 build_client() 一处；想换实验只改下面这一行。
     client = build_client()
     # main(client)
-    # start_chat(client)
+    start_chat(client)
     # structured_output(client)
     # model_json(client)
-    summarize(client)
+    # summarize(client)
